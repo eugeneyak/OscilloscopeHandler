@@ -1,0 +1,172 @@
+var sNameChannel1 = "Канал для синхронизации";
+var sNameChannel2 = "Канал ДМРВ";
+
+var sTakeEveryFront = "Пропуск фронтов";
+var sSkipHeadFront  = "Пропуск начальных фронтов";
+
+var sLevel = "Уровень перехода";
+
+var Setup = CreateConfigure("Strob Config");
+
+Setup.AddItem(sNameChannel1, 1);
+Setup.AddItem(sNameChannel2, 2);
+Setup.AddItem(sTakeEveryFront, 2);
+Setup.AddItem(sSkipHeadFront, 0);
+Setup.AddItem(sLevel, 0);
+
+Setup.Configure(); 
+
+var iSignalChannel = Setup.GetValue(sNameChannel1);
+var iMetricChannel = Setup.GetValue(sNameChannel2);
+
+var iTakeEveryFront = Setup.GetValue(sTakeEveryFront);
+var iSkipHeadFront = Setup.GetValue(sSkipHeadFront);
+
+var iLevel = Setup.GetValue(sLevel);
+
+function AvePositiveValue(channel) {
+    var sum = 0
+    var cnt = 0
+
+    for (var i=0; i < NumberOfSamples; i++) {
+        var value = Host.ValueAt(channel, i)
+
+        if (value > 0) {
+            sum += value
+            cnt += 1
+        }
+    }
+
+    return sum / cnt
+}
+
+function SynchSignalLine(channel) {
+    Host.ReportOut("SynchingSignalLine...\n");
+
+    var pos = 0
+    var markers = []
+    var skip = iSkipHeadFront
+
+    var fLevel = iLevel
+    
+    if (fLevel == 0) fLevel = AvePositiveValue(channel)
+
+    Host.ReportOut("fLevel : " + fLevel + "\n");
+
+    while (true) {
+        pos = Host.SynchBy(channel, 1, fLevel, pos, 0)
+
+        if (pos == -1) break;
+
+        // Host.ReportOut("POS: " + pos + "\n");
+
+        skip -= 1
+
+        if (skip < 0) {
+            markers.push(pos)
+            SetMarker(pos, '')
+            skip = iTakeEveryFront
+        }
+    }
+
+    Host.ReportOut("SynchingSignalLine complete, found " + markers.length + " markers\n");
+
+    return markers
+}
+
+function SynchControlLine(channel, from, to) {
+    var fLevel = Host.AveValueAt(channel, NumberOfSamples / 2, NumberOfSamples);
+    
+    var pos = from
+    var markers = []
+
+    while (true) {
+        if (pos == -1) break;
+
+        pos = Host.SynchBy( channel, -1, fLevel, pos, to > 0 ? to - pos : 0 );
+        markers.push(pos)
+    }
+
+    return markers;
+}
+
+var SignalMarkers = SynchSignalLine(iSignalChannel, 2)
+
+
+//              
+
+var slices = []
+
+for (var i = 1; i < SignalMarkers.length - 1; i++) {
+    var markers = SynchControlLine( iMetricChannel, SignalMarkers[i-1], SignalMarkers[i] )
+    var slice = []
+
+    for(var j = 1; j < markers.length - 1; j++) {
+        var pos1 = markers[j-1]
+        var pos2 = markers[j]
+    
+        var time1 = (pos2 - pos1) / Frequency;
+        var time2 = (pos2 - markers[1]) / Frequency;
+        
+        var w = 60 / (60 * time1);
+    
+        slice.push({time: time2, value: w})
+    }
+
+    slices.push(slice)
+}
+
+// //                                           
+
+var size = slices[0].length
+
+for (var i = 0; i < slices.length; i++) {
+  if (size > slices[i].length) {
+    size = slices[i].length
+  }
+}
+
+
+// //                                
+
+for (var i = 0; i < slices.length; i++) {
+    var delta = slices[i].length - size
+  
+    for (d = 0; d < delta; d++) {
+      slices[i].splice(size / (delta + 1) * (d + 1), 1)
+    }
+  }
+
+// //                  
+
+var summedSlice = []
+
+for (var i = 0; i < size; i++) {
+  var sum = 0;
+
+  for (var j = 0; j < slices.length; j++) {
+    var slice = slices[j]
+
+    sum += slice[i].value
+  }
+
+  summedSlice.push({ 
+    value: sum / slices.length,
+    time:  slices[0][i].time
+  })
+}
+
+// //              
+
+var GraphObj1 = Host.CreateGraphic( "Graphic1",  "      ",  0x00B000 );
+
+for (var i = 0; i < summedSlice.length; i++) {
+    GraphObj1.AddPoint( summedSlice[i].time, summedSlice[i].value ); 
+}
+
+var GraphViewObj = Host.CreateGraphicView( "      " );
+
+GraphViewObj.AddGraphicEx( GraphObj1, 2, 0x000080 );
+GraphViewObj.Update();
+GraphViewObj.Show();
+  
