@@ -1,3 +1,7 @@
+// Encoding: Windows 1251
+
+var sCylindersCount = "Количество цилиндров"
+
 var sNameChannel1 = "Канал для синхронизации";
 var sNameChannel2 = "Канал ДМРВ";
 
@@ -8,6 +12,7 @@ var sLevel = "Уровень перехода";
 
 var Setup = CreateConfigure("Strob Config");
 
+Setup.AddItem(sCylindersCount, 4);
 Setup.AddItem(sNameChannel1, 1);
 Setup.AddItem(sNameChannel2, 2);
 Setup.AddItem(sTakeEveryFront, 2);
@@ -15,6 +20,8 @@ Setup.AddItem(sSkipHeadFront, 0);
 Setup.AddItem(sLevel, 0);
 
 Setup.Configure(); 
+
+var iCylindersCount = Setup.GetValue(sCylindersCount);
 
 var iSignalChannel = Setup.GetValue(sNameChannel1);
 var iMetricChannel = Setup.GetValue(sNameChannel2);
@@ -25,119 +32,168 @@ var iSkipHeadFront = Setup.GetValue(sSkipHeadFront);
 var iLevel = Setup.GetValue(sLevel);
 
 function AvePositiveValue(channel) {
-    var sum = 0
-    var cnt = 0
+  var sum = 0
+  var cnt = 0
 
-    for (var i=0; i < NumberOfSamples; i++) {
-        var value = Host.ValueAt(channel, i)
+  for (var i=0; i < NumberOfSamples; i++) {
+      var value = Host.ValueAt(channel, i)
 
-        if (value > 0) {
-            sum += value
-            cnt += 1
-        }
-    }
+      if (value > 0) {
+          sum += value
+          cnt += 1
+      }
+  }
 
-    return sum / cnt
+  return sum / cnt
 }
 
-function SynchSignalLine(channel) {
-    Host.ReportOut("SynchingSignalLine...\n");
+if (iLevel == 0) {
+  Host.ReportOut(sLevel + ", производится автоматический расчет : ");
+  iLevel = AvePositiveValue(iSignalChannel)
+  Host.ReportOut(iLevel + "\n\n");
+} 
 
-    var pos = 0
-    var markers = []
-    var skip = iSkipHeadFront
+function SynchSignalLine(channel, level, skipHeadFronts, takeEveryFront) {
+  Host.ReportOut("Обработка сигнальной линии...\n");
+  Host.ReportOut("  " + sSkipHeadFront + " : " + skipHeadFronts + "\n");
+  Host.ReportOut("  " + sTakeEveryFront + " : " + takeEveryFront + "\n");
 
-    var fLevel = iLevel
-    
-    if (fLevel == 0) fLevel = AvePositiveValue(channel)
+  var pos = 0
+  var markers = []
 
-    Host.ReportOut("fLevel : " + fLevel + "\n");
+  while (true) {
+      pos = Host.SynchBy(channel, 1, level, pos, 0)
 
-    while (true) {
-        pos = Host.SynchBy(channel, 1, fLevel, pos, 0)
+      if (pos == -1) break;
 
-        if (pos == -1) break;
+      skipHeadFronts -= 1
 
-        // Host.ReportOut("POS: " + pos + "\n");
+      if (skipHeadFronts < 0) {
+          markers.push(pos)
+          SetMarker(pos, '')
+          skipHeadFronts = takeEveryFront
+      }
+  }
 
-        skip -= 1
+  Host.ReportOut("  Обнаружено циклов: " + markers.length + "\n");
+  Host.ReportOut("\n");
 
-        if (skip < 0) {
-            markers.push(pos)
-            SetMarker(pos, '')
-            skip = iTakeEveryFront
-        }
-    }
-
-    Host.ReportOut("SynchingSignalLine complete, found " + markers.length + " markers\n");
-
-    return markers
+  return markers
 }
 
 function SynchControlLine(channel, from, to) {
-    var fLevel = Host.AveValueAt(channel, NumberOfSamples / 2, NumberOfSamples);
-    
-    var pos = from
-    var markers = []
+  Host.ReportOut("Обработка контрольной линии " + from + " -> " + to + ".");
 
-    while (true) {
-        if (pos == -1) break;
+  var fLevel = Host.AveValueAt(channel, NumberOfSamples / 2, NumberOfSamples);
+  
+  var pos = from
+  var markers = []
 
-        pos = Host.SynchBy( channel, -1, fLevel, pos, to > 0 ? to - pos : 0 );
-        markers.push(pos)
-    }
+  while (true) {
+      if (pos == -1) break;
 
-    return markers;
+      pos = Host.SynchBy( channel, -1, fLevel, pos, to > 0 ? to - pos : 0 );
+      markers.push(pos)
+  }
+
+  Host.ReportOut(" Найдено точек:  " + markers.length + "\n");
+
+  return markers;
 }
 
-var SignalMarkers = SynchSignalLine(iSignalChannel, 2)
+var SignalMarkers = SynchSignalLine(iSignalChannel, iLevel, iSkipHeadFront, iTakeEveryFront)
 
-
-//              
+// Нарезание срезов //
 
 var slices = []
 
-for (var i = 1; i < SignalMarkers.length - 1; i++) {
-    var markers = SynchControlLine( iMetricChannel, SignalMarkers[i-1], SignalMarkers[i] )
-    var slice = []
+for (var i = 1; i < SignalMarkers.length; i++) {
+  var markers = SynchControlLine( iMetricChannel, SignalMarkers[i-1], SignalMarkers[i] )
+  var slice = []
 
-    for(var j = 1; j < markers.length - 1; j++) {
-        var pos1 = markers[j-1]
-        var pos2 = markers[j]
-    
-        var time1 = (pos2 - pos1) / Frequency;
-        var time2 = (pos2 - markers[1]) / Frequency;
-        
-        var w = 60 / (60 * time1);
-    
-        slice.push({time: time2, value: w})
-    }
-
-    slices.push(slice)
-}
-
-// //                                           
-
-var size = slices[0].length
-
-for (var i = 0; i < slices.length; i++) {
-  if (size > slices[i].length) {
-    size = slices[i].length
-  }
-}
-
-
-// //                                
-
-for (var i = 0; i < slices.length; i++) {
-    var delta = slices[i].length - size
+  for(var j = 1; j < markers.length - 1; j++) {
+      var pos1 = markers[j-1]
+      var pos2 = markers[j]
   
-    for (d = 0; d < delta; d++) {
-      slices[i].splice(size / (delta + 1) * (d + 1), 1)
+      var time1 = (pos2 - pos1) / Frequency;
+      var time2 = (pos2 - markers[1]) / Frequency;
+      
+      var w = 60 / (60 * time1);
+  
+      slice.push({time: time2, value: w})
+  }
+
+  slices.push(slice)
+}
+
+Host.ReportOut("\n");
+
+// Срезы могут иметь разную длину //
+// Поиск минимальной длины срезов, кратной количеству цилиндров //
+
+function minLengthOfArrays(arrays, multiple) {
+  Host.ReportOut("Выравнивание длины срезов с учетом " + multiple + " цилиндров: ");
+  var length = arrays[0].length
+
+  for (var i = 1; i < slices.length; i++) {
+    candidate = slices[i].length
+
+    if (candidate < length) {
+      length = candidate - (candidate % multiple)
     }
   }
 
-// //                  
+  Host.ReportOut(length + "\n\n");
+
+  return length
+}
+
+var size = minLengthOfArrays(slices, iCylindersCount)
+
+// Усреднение длины срезов //                                
+
+for (var i = 0; i < slices.length; i++) {
+  var delta = slices[i].length - size
+
+  for (d = 0; d < delta; d++) {
+    slices[i].splice(size / (delta + 1) * (d + 1), 1)
+  }
+}
+
+// Нахождение и вывод максимальных и минимальных значений в отчет //
+
+Host.ReportOut("Минимумы и максимумы графика в формате ");
+for (var i = 0; i < iCylindersCount; i++) Host.ReportOut("MIN;MAX;"); 
+Host.ReportOut(":\n");
+
+for (var i = 0; i < slices.length; i++) {
+  var slice = slices[i]
+  var window = size / iCylindersCount
+
+  for (var t = 0; t < iCylindersCount; t++) {
+    var from = window * t
+    var to   = from + window
+
+    var min = slice[from].value
+    var max = slice[from].value
+  
+    for (var j = from + 1; j < to; j++) {
+      candidate = slice[j].value
+  
+      if (candidate < min) min = candidate
+      if (candidate > max) max = candidate
+    }
+  
+    Host.ReportOut(min + ";");
+    Host.ReportOut(max + ";");
+  }
+
+  Host.ReportOut("\n");
+}
+
+Host.ReportOut("\n");
+
+// Вычисление усредненного среза //                  
 
 var summedSlice = []
 
@@ -156,15 +212,23 @@ for (var i = 0; i < size; i++) {
   })
 }
 
-// //              
 
-var GraphObj1 = Host.CreateGraphic( "Graphic1",  "      ",  0x00B000 );
+var sum = 0
+for (var i = 0; i < size; i++) {
+  sum += summedSlice[i].value
+}
+Host.ReportOut("Среденяя точка: " + sum / size + "\n");
+
+
+// Вывод графики //              
+
+var GraphObj1 = Host.CreateGraphic( "Graphic1",  "Graphic",  0x00B000 );
 
 for (var i = 0; i < summedSlice.length; i++) {
     GraphObj1.AddPoint( summedSlice[i].time, summedSlice[i].value ); 
 }
 
-var GraphViewObj = Host.CreateGraphicView( "      " );
+var GraphViewObj = Host.CreateGraphicView( "График работы цилиндров" );
 
 GraphViewObj.AddGraphicEx( GraphObj1, 2, 0x000080 );
 GraphViewObj.Update();
