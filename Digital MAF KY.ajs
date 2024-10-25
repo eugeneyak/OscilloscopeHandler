@@ -163,7 +163,7 @@ for (var i = 0; i < slices.length; i++) {
 // Нахождение и вывод максимальных и минимальных значений в отчет //
 
 Host.ReportOut("Минимумы и максимумы графика в формате ");
-for (var i = 0; i < iCylindersCount; i++) Host.ReportOut("MIN;MAX;"); 
+for (var i = 0; i < iCylindersCount; i++) Host.ReportOut("MIN; MAX; "); 
 Host.ReportOut(":\n");
 
 for (var i = 0; i < slices.length; i++) {
@@ -184,8 +184,8 @@ for (var i = 0; i < slices.length; i++) {
       if (candidate > max) max = candidate
     }
   
-    Host.ReportOut(min + ";");
-    Host.ReportOut(max + ";");
+    Host.ReportOut(min.toFixed(2) + "; ");
+    Host.ReportOut(max.toFixed(2) + "; ");
   }
 
   Host.ReportOut("\n");
@@ -217,7 +217,7 @@ var sum = 0
 for (var i = 0; i < size; i++) {
   sum += summedSlice[i].value
 }
-Host.ReportOut("Среденяя точка: " + sum / size + "\n");
+Host.ReportOut("Среденяя точка: " + (sum / size).toFixed(2) + "\n");
 
 
 // Вывод графики //              
