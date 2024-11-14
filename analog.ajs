@@ -1,0 +1,259 @@
+var sCylindersCount     = "Количество цилиндров"
+var sSkipFrontCount     = "Число пропуска фронтов";  
+var sNameEngineChannel  = "Канал датчика цилиндров";
+var sNameStrobChannel   = "Канал датчика распредвала";
+var sDecimationStep     = "Число точек децимации";
+var sPointsCount        = "Число точек аппроксимации"
+var sAveragingStep      = "Число точек усреднения";
+
+var Setup = CreateConfigure("Configuration");  
+
+Setup.AddItem(sCylindersCount, 4);
+Setup.AddItem(sSkipFrontCount, 0);
+Setup.AddItem(sNameEngineChannel, 1);
+Setup.AddItem(sNameStrobChannel, 2);
+Setup.AddItem(sPointsCount, 720);
+Setup.AddItem(sDecimationStep, 1);
+Setup.AddItem(sAveragingStep, 10);
+
+Setup.Configure(); 
+
+
+// Проставляем синие точки по циклам
+
+var isSkipFrontCount = Setup.GetValue(sSkipFrontCount)
+
+function findPoints(source) {
+  return selectPoints(source, 0, [], isSkipFrontCount-1)
+}
+
+function selectPoints(source, from, acc, skip) {
+  var point = Host.SynchBy(source, 1, 1, from, 0);
+
+  if (point > 0) {
+    if(skip < 0) acc.push(point)
+    if(skip < 0) skip = isSkipFrontCount
+
+    selectPoints(source, point, acc, skip - 1)
+  }
+
+  return acc
+}
+
+var StrobChannelPoints = findPoints(Setup.GetValue(sNameStrobChannel))
+
+for (var i = 0; i < StrobChannelPoints.length; i++) {
+   SetMarker(StrobChannelPoints[i], i);
+}
+
+
+Host.ReportOut("\n Рабочих циклов: " + StrobChannelPoints.length);
+
+var StrobChannelPoints = findPoints(Setup.GetValue(sNameStrobChannel))
+
+for (var i = 0; i < StrobChannelPoints.length; i++) {
+  SetMarker(StrobChannelPoints[i], i);
+}
+
+
+
+// Находим циклы
+
+var iNameEngineChannel = Setup.GetValue(sNameEngineChannel);
+var iDecimationStep    = Setup.GetValue(sDecimationStep);
+
+var slices = []
+
+for (var i = 0; i < StrobChannelPoints.length - 1; i++) {
+  var from = StrobChannelPoints[i]
+  var till = StrobChannelPoints[i+1]
+
+  var slice = []
+
+  for (var j = from; j < till; j += iDecimationStep) {
+    slice.push({ 
+      value: ValueAt( iNameEngineChannel, j),
+      time:  j / Frequency
+    })
+  }
+
+  slices.push(slice)
+}
+
+
+// Находим длину самого короткого цикла цикла
+
+var iCylindersCount = Setup.GetValue(sCylindersCount);
+
+var size = slices[0].length
+
+for (var i = 0; i < slices.length; i++) {
+  var candidate = slices[i].length - (slices[i].length % iCylindersCount)
+
+  if (candidate < size) {
+    size = candidate - (candidate % iCylindersCount)
+  }
+}
+
+// Уравниванием все циклы по длине
+
+for (var i = 0; i < slices.length; i++) {
+  var delta = slices[i].length - size
+
+  for (d = 0; d < delta; d++) {
+    slices[i].splice(size / (delta + 1) * (d + 1), 1)
+  }
+}
+
+// Поиск максимум / минимумов
+
+Host.ReportOut("Минимумы и максимумы графика в формате ");
+for (var i = 0; i < iCylindersCount; i++) Host.ReportOut("MIN; MAX; "); 
+Host.ReportOut(":\n");
+
+for (var i = 0; i < slices.length; i++) {
+  var slice = slices[i]
+  var window = size / iCylindersCount
+
+  for (var t = 0; t < iCylindersCount; t++) {
+    var from = window * t
+    var to   = from + window
+
+    var min = slice[from].value
+    var max = slice[from].value
+  
+    for (var j = from + 1; j < to; j++) {
+      candidate = slice[j].value
+  
+      if (candidate < min) min = candidate
+      if (candidate > max) max = candidate
+    }
+  
+    Host.ReportOut(min.toFixed(2) + "; ");
+    Host.ReportOut(max.toFixed(2) + "; ");
+  }
+
+  Host.ReportOut("\n");
+}
+
+
+// Усреднение циклов
+
+var summedSlice = []
+
+for (var i = 0; i < size; i++) {
+  var sum = 0;
+
+  for (var j = 0; j < slices.length; j++) {
+    var slice = slices[j]
+
+    sum += slice[i].value
+  }
+
+  summedSlice.push({ 
+    value: sum / slices.length,
+    time:  slices[0][i].time
+  })
+}
+
+// Поиск средней точки
+
+var sum = 0
+for (var i = 0; i < size; i++) {
+  sum += summedSlice[i].value
+}
+Host.ReportOut("Среденяя точка: " + (sum / size).toFixed(2) + "\n");
+
+
+// Сглаживание циклов
+
+ function movingAverage(input, averageWidth) {
+     var result = new Array();
+    
+     if (averageWidth % 2 == 0) { averageWidth++; }
+    
+     var iWidth = ( averageWidth - 1 ) / 2;
+    
+     result[0] = input[0];
+    
+     var iPointsCount, iStart, iEnd;
+    
+     for( var i = 0; i < input.length; i++ ) {
+         if (i < iWidth) { 
+             iStart = 0;
+             iEnd = 2 * i;
+             iPointsCount = iEnd + 1;
+         } else if ((i + iWidth) > (input.length - 1)) {
+             iStart = i - input.length + i + 1;
+             iEnd = input.length - 1;
+             iPointsCount = iEnd - iStart + 1;
+         } else { 
+             iStart = i - iWidth;
+             iEnd = i + iWidth;
+             iPointsCount = averageWidth;
+         }
+        
+         var fSum = 0;
+
+         for( j = iStart; j <= iEnd; j++ ) {
+             fSum = fSum + input[j].value;
+         }
+        
+         result[i] = { time: input[i].time, value: (fSum / iPointsCount) };
+     }
+    
+     return result;
+ }
+
+var iAveragingStep = Setup.GetValue(sAveragingStep);
+
+var averagedSlice = movingAverage(summedSlice, iAveragingStep)
+
+// Делаем график определенной длины, децимацию желательно отключать (ставить равной 1)
+
+function cutCount(input, count) {
+  var delta = input.length - count
+  
+  for (d = 0; d < delta; d++) {
+    input.splice(count / (delta + 1) * (d + 1), 1)
+  }
+
+  return input
+}
+
+cutCount(slices[0], Setup.GetValue(sPointsCount))
+cutCount(summedSlice, Setup.GetValue(sPointsCount))
+cutCount(averagedSlice, Setup.GetValue(sPointsCount))
+
+// RENDER
+
+var GraphViewObj = Host.CreateGraphicView( "График" );
+
+var ReferenceGraph = Host.CreateGraphic("Reference", "", 0xFF0000);
+var SummedGraph    = Host.CreateGraphic("Summed",    "", 0x00FF00);
+var AveragedGraph  = Host.CreateGraphic("Averaged",  "Averaged", 0x0000FF);
+
+ReferenceGraph.SetScale( 0, 0xbfffbf );
+
+for (var i = 0; i < slices[0].length; i++) {
+  ReferenceGraph.AddPoint( slices[0][i].time, slices[0][i].value ); 
+}
+
+for (var i = 0; i < summedSlice.length; i++) {
+  SummedGraph.AddPoint( summedSlice[i].time, summedSlice[i].value ); 
+}
+
+for (var i = 0; i < averagedSlice.length; i++) {
+  AveragedGraph.AddPoint( averagedSlice[i].time, averagedSlice[i].value ); 
+}
+
+ GraphViewObj.SetDescription("Х - время, с; У - напряжение, В."); 
+ GraphViewObj.AddGraphicEx( ReferenceGraph, 2, 0xFF0000 );
+ GraphViewObj.AddGraphicEx( SummedGraph,    2, 0x00FF00 );
+ GraphViewObj.AddGraphicEx( AveragedGraph,  2, 0x0000FF );
+
+ GraphViewObj.SetScale( 0, 0xbfffbf );
+ AveragedGraph.SetScale( 0, 0xbfffbf );
+
+ GraphViewObj.Update();
+ GraphViewObj.Show();
