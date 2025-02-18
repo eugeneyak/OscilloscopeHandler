@@ -1,0 +1,257 @@
+// Encoding: Windows 1251
+
+var Setup = CreateConfigure("Strob Config");
+
+var sCylindersCount = "Количество цилиндров"
+Setup.AddItem(sCylindersCount, 4);
+
+var sSyncChannel = "Канал для синхронизации";
+Setup.AddItem(sSyncChannel, 1);
+
+var sSyncTransitionLevel = "Уровень перехода канала синхронизации";
+Setup.AddItem(sSyncTransitionLevel, 0);
+
+var sTakeEveryFront = "Пропуск фронтов";
+Setup.AddItem(sTakeEveryFront, 2);
+
+var sSkipHeadFront  = "Пропуск начальных фронтов";
+Setup.AddItem(sSkipHeadFront, 0);
+
+var sMetricChannel = "Канал ДМРВ";
+Setup.AddItem(sMetricChannel, 2);
+
+var sMetricTransitionLevel = "Уровень перехода канала ДМРВ";
+Setup.AddItem(sMetricTransitionLevel, 0);
+
+Setup.Configure(); 
+
+var iCylindersCount        = Setup.GetValue(sCylindersCount);
+var iSyncChannel           = Setup.GetValue(sSyncChannel);
+var iMetricChannel         = Setup.GetValue(sMetricChannel);
+var iTakeEveryFront        = Setup.GetValue(sTakeEveryFront);
+var iSkipHeadFront         = Setup.GetValue(sSkipHeadFront);
+var iSyncTransitionLevel   = Setup.GetValue(sSyncTransitionLevel);
+var iMetricTransitionLevel = Setup.GetValue(sMetricTransitionLevel);
+
+function AvePositiveValue(channel) {
+  var sum = 0
+  var cnt = 0
+
+  for (var i=0; i < NumberOfSamples; i++) {
+    var value = Host.ValueAt(channel, i)
+
+    if (value > 0) {
+      sum += value
+      cnt += 1
+    }
+  }
+
+  return sum / cnt
+}
+
+Host.ReportOut(Channels)
+
+if (iSyncTransitionLevel == 0) {
+  Host.ReportOut(sSyncTransitionLevel + ", производится автоматический расчет : ");
+  iSyncTransitionLevel = AvePositiveValue(iSyncChannel)
+  Host.ReportOut(iSyncTransitionLevel + "\n");
+} else {
+  Host.ReportOut(sSyncTransitionLevel + " : " + iSyncTransitionLevel + "\n");
+}
+
+if (iMetricTransitionLevel == 0) {
+  Host.ReportOut(sMetricTransitionLevel + ", производится автоматический расчет : ");
+  iMetricTransitionLevel = Host.AveValueAt(iMetricChannel, NumberOfSamples / 2, NumberOfSamples)
+  Host.ReportOut(iMetricTransitionLevel + "\n");
+} else {
+  Host.ReportOut(sMetricTransitionLevel + " : " + iMetricTransitionLevel + "\n");
+}
+
+Host.ReportOut("\n");
+
+function SynchSignalLine(channel, level, skipHeadFronts, takeEveryFront) {
+  Host.ReportOut("Обработка сигнальной линии...\n");
+  Host.ReportOut("  " + sSkipHeadFront + " : " + skipHeadFronts + "\n");
+  Host.ReportOut("  " + sTakeEveryFront + " : " + takeEveryFront + "\n");
+
+  var pos = 0
+  var markers = []
+
+  while (true) {
+      pos = Host.SynchBy(channel, 1, level, pos, 0)
+
+      if (pos == -1) break;
+
+      skipHeadFronts -= 1
+
+      if (skipHeadFronts < 0) {
+          markers.push(pos)
+          SetMarker(pos, 'Фронт ' + markers.length + " (" + pos + ")")
+          skipHeadFronts = takeEveryFront
+      }
+  }
+
+  Host.ReportOut("  Выделено фронтов: " + markers.length + "\n");
+  Host.ReportOut("\n");
+
+  return markers
+}
+
+function SynchControlLine(channel, level, from, to) {
+  Host.ReportOut("  " + from + " -> " + to + ".");
+
+  var pos = from
+  var markers = []
+
+  while (true) {
+      if (pos == -1) break;
+
+      pos = Host.SynchBy( channel, -1, level, pos, to > 0 ? to - pos : 0 );
+      markers.push(pos)
+  }
+
+  Host.ReportOut(" Найдено точек:  " + markers.length + "\n");
+
+  return markers;
+}
+
+var SignalMarkers = SynchSignalLine(iSyncChannel, iSyncTransitionLevel, iSkipHeadFront, iTakeEveryFront)
+
+// // Нарезание срезов //
+
+Host.ReportOut("Обработка ДМРВ...\n");
+
+var slices = []
+
+for (var i = 1; i < SignalMarkers.length; i++) {
+  var markers = SynchControlLine( iMetricChannel, iMetricTransitionLevel, SignalMarkers[i-1], SignalMarkers[i] )
+  var slice = []
+
+  for(var j = 2; j < markers.length - 2; j++) {
+    var pos1 = markers[j-1]
+    var pos2 = markers[j]
+
+    var time1 = (pos2 - pos1) / Frequency;
+    var time2 = (pos2 - markers[1]) / Frequency;
+    
+    var w = 60 / (60 * time1);
+
+    slice.push({time: time2, value: w})
+  }
+
+  slices.push(slice)
+}
+
+Host.ReportOut("\n");
+
+// Срезы могут иметь разную длину //
+// Поиск минимальной длины срезов, кратной количеству цилиндров //
+
+function minLengthOfArrays(arrays, multiple) {
+
+  var length = arrays[0].length
+
+  for (var i = 1; i < slices.length; i++) {
+    candidate = slices[i].length
+
+    if (candidate < length) {
+      length = candidate - (candidate % multiple)
+    }
+  }
+
+  return length
+}
+
+Host.ReportOut("Выравнивание длины срезов с учетом " + iCylindersCount + " цилиндров: ");
+var size = minLengthOfArrays(slices, iCylindersCount)
+Host.ReportOut(size + "\n\n");
+
+// // Усреднение длины срезов //                                
+
+for (var i = 0; i < slices.length; i++) {
+  var delta = slices[i].length - size
+
+  for (d = 0; d < delta; d++) {
+    slices[i].splice(size / (delta + 1) * (d + 1), 1)
+  }
+}
+
+// Нахождение и вывод максимальных и минимальных значений в отчет //
+
+Host.ReportOut("Минимумы и максимумы графика в формате ");
+for (var i = 0; i < iCylindersCount; i++) Host.ReportOut("MIN; MAX; "); 
+Host.ReportOut(":\n");
+
+for (var i = 0; i < slices.length; i++) {
+  var slice = slices[i]
+  var window = size / iCylindersCount
+
+  for (var t = 0; t < iCylindersCount; t++) {
+    var from = window * t
+    var to   = from + window
+
+    var min = slice[from].value
+    var max = slice[from].value
+  
+    for (var j = from + 1; j < to; j++) {
+      candidate = slice[j].value
+  
+      if (candidate < min) min = candidate
+      if (candidate > max) max = candidate
+    }
+  
+    Host.ReportOut(min.toFixed(2) + "; ");
+    Host.ReportOut(max.toFixed(2) + "; ");
+  }
+
+  Host.ReportOut("\n");
+}
+
+Host.ReportOut("\n");
+
+
+// Вычисление усредненного среза //                  
+
+var summedSlice = []
+
+for (var i = 0; i < size; i++) {
+  var sum = 0;
+
+  for (var j = 0; j < slices.length; j++) {
+    var slice = slices[j]
+
+    sum += slice[i].value
+  }
+
+  summedSlice.push({ 
+    value: sum / slices.length,
+    time:  slices[0][i].time
+  })
+}
+
+
+// Вычисление усредненной точки по усредненному срезу // 
+
+var sum = 0
+for (var i = 0; i < size; i++) sum += summedSlice[i].value
+Host.ReportOut("Среденяя точка: " + (sum / size).toFixed(2) + "\n");
+
+
+// Вывод графики //              
+
+var GraphObj1 = Host.CreateGraphic( "Graphic1",  "Graphic",  0x00B000 );
+
+for (var i = 0; i < summedSlice.length; i++) {
+    GraphObj1.AddPoint( summedSlice[i].time, summedSlice[i].value ); 
+}
+
+var GraphViewObj = Host.CreateGraphicView( "График работы цилиндров" );
+
+GraphViewObj.AddGraphicEx( GraphObj1, 2, 0x000080 );
+
+GraphViewObj.SetScale( 0, 0xedebeb );
+GraphObj1.SetScale( 0, 0xedebeb );
+
+GraphViewObj.Update();
+GraphViewObj.Show();
+  
